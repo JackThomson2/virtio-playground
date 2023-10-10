@@ -1,4 +1,4 @@
-use std::{error::Error, io};
+use std::{error::Error, io, string, fmt::format};
 
 /// A simple example demonstrating how to handle user input. This is
 /// a bit out of the scope of the library as it does not provide any
@@ -15,12 +15,14 @@ use std::{error::Error, io};
 /// **Note: ** as this is a relatively simple example unicode characters are unsupported and
 /// their use will result in undefined behaviour.
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, EventStream},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures::FutureExt;
 use ratatui::{prelude::*, widgets::*};
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::{runtime, select};
+use tokio_stream::StreamExt;
 
 use crate::comms::{CommsLink, Messages};
 
@@ -48,6 +50,9 @@ struct App {
     cursor_position: usize,
     /// Current input mode
     input_mode: InputMode,
+
+    os_message: Vec<String>,
+
     /// History of recorded messages
     messages: Vec<String>,
 
@@ -66,6 +71,7 @@ impl App {
         App {
             input: String::new(),
             input_mode: InputMode::Normal,
+            os_message: Vec::new(),
             messages: Vec::new(),
             cursor_position: 0,
             comms,
@@ -75,17 +81,10 @@ impl App {
         }
     }
 
-    pub fn check_comms(&mut self) -> bool {
-        loop {
-            let message = match self.comms.rx.try_recv() {
-                Ok(message) => message,
-                Err(TryRecvError::Empty) => return false,
-                Err(TryRecvError::Disconnected) => return true,
-            };
-
-            if let Messages::String(str) = message {
-                self.messages.push(format!("OS update: {str}"));
-            }
+    pub fn get_user_title(&self) -> String {
+        match self.input_mode {
+            InputMode::Messages => { format!("Editing file: {}", self.file_name) }
+            _ => format!("Text editor"),
         }
     }
 
@@ -174,36 +173,32 @@ impl App {
     fn submit_message(&mut self) {
         if self.input_mode == InputMode::FileName {
             self.file_name = self.input.clone();
+            self.messages = vec![];
         } else if self.input_mode == InputMode::Messages {
             self.file_contents.push_str(&self.input);
             self.file_contents.push_str("\n");
-        }
 
-        let message = match self.input_mode {
-            InputMode::FileName => { format!("File name: {:}", self.input) },
-            InputMode::Messages => { format!("File content : {:}", self.input) },
-            _ => self.input.clone()
-        };
+            self.messages.push(self.input.clone());
+        }
 
         if self.input_mode == InputMode::FileName {
             self.input_mode = InputMode::Messages;
         }
 
-        self.messages.push(message);
-
         self.input.clear();
         self.reset_cursor();
     }
 
-    fn esc_pressed(&mut self) {
+    async fn esc_pressed(&mut self) {
         if self.input_mode == InputMode::Messages {
             let update_message = format!("UI thread submitting a file write");
-            self.messages.push(update_message);
+
+            self.messages = vec![update_message];
             self.file_contents.push_str(&self.input);
 
             let create_mesasge = Messages::FileWrite(self.file_name.clone(), self.file_contents.clone());
 
-            self.comms.tx.blocking_send(create_mesasge).unwrap();
+            self.comms.tx.send(create_mesasge).await.unwrap();
 
             self.file_name.clear();
             self.file_contents.clear();
@@ -221,9 +216,12 @@ pub fn create_terminal(comms: CommsLink) -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // create app and run it
+    let rt = runtime::Builder::new_current_thread().enable_all().build().unwrap();
+
     let app = App::new(comms);
-    let res = run_app(&mut terminal, app);
+    rt.block_on(async {
+        run_app(&mut terminal, app).await.unwrap();
+    });
 
     // restore terminal
     disable_raw_mode()?;
@@ -234,58 +232,61 @@ pub fn create_terminal(comms: CommsLink) -> Result<(), Box<dyn Error>> {
     )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = res {
-        println!("{err:?}");
-    }
-
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+    let mut reader = EventStream::new();
+
     loop {
-        if app.check_comms() {
-            return Ok(());
-        }
-
         terminal.draw(|f| ui(f, &mut app))?;
+        let event = reader.next().fuse();
+        let os_event = app.comms.rx.recv().fuse();
 
-        if let Event::Key(key) = event::read()? {
-            match app.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
-                        app.enter_edit();
-                    }
-                    KeyCode::Char('q') => {
-                        return Ok(());
-                    }
-                    KeyCode::Up => {
-                        app.move_cursor_up();
-                    }
-                    KeyCode::Down => {
-                        app.move_cursor_down();
-                    }
+        select! {
+            Some(Ok(Event::Key(key))) = event => {
+                match app.input_mode {
+                    InputMode::Normal => match key.code {
+                        KeyCode::Char('e') => {
+                            app.enter_edit();
+                        }
+                        KeyCode::Char('q') => {
+                            return Ok(());
+                        }
+                        KeyCode::Up => {
+                            app.move_cursor_up();
+                        }
+                        KeyCode::Down => {
+                            app.move_cursor_down();
+                        }
+                        _ => {}
+                    },
+                    _ if key.kind == KeyEventKind::Press => match key.code {
+                        KeyCode::Enter => app.submit_message(),
+                        KeyCode::Char(to_insert) => {
+                            app.enter_char(to_insert);
+                        }
+                        KeyCode::Backspace => {
+                            app.delete_char();
+                        }
+                        KeyCode::Left => {
+                            app.move_cursor_left();
+                        }
+                        KeyCode::Right => {
+                            app.move_cursor_right();
+                        }
+                        KeyCode::Esc => {
+                            app.esc_pressed().await;
+                        }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => app.submit_message(),
-                    KeyCode::Char(to_insert) => {
-                        app.enter_char(to_insert);
-                    }
-                    KeyCode::Backspace => {
-                        app.delete_char();
-                    }
-                    KeyCode::Left => {
-                        app.move_cursor_left();
-                    }
-                    KeyCode::Right => {
-                        app.move_cursor_right();
-                    }
-                    KeyCode::Esc => {
-                        app.esc_pressed();
-                    }
-                    _ => {}
-                },
-                _ => {}
+                }
+            },
+            Some(message) = os_event => {
+                if let Messages::String(str) = message {
+                    app.os_message.push(format!("{str}"));
+                }
             }
         }
     }
@@ -303,6 +304,14 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             .as_ref(),
         )
         .split(f.size());
+
+    let inner_types = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50)
+        ])
+        .split(chunks[2]);
 
     let (msg, style) = match app.input_mode {
         InputMode::Normal => (
@@ -378,9 +387,27 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             ListItem::new(content)
         })
         .collect();
+
     let messages =
-        List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"))
+        List::new(messages).block(Block::default().borders(Borders::ALL).title(app.get_user_title()))
         .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
         .highlight_symbol(">>");
-    f.render_stateful_widget(messages, chunks[2], &mut app.list_state);
+    f.render_stateful_widget(messages, inner_types[0], &mut app.list_state);
+
+    let os_messages: Vec<ListItem> = app
+        .os_message
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let content = Line::from(Span::raw(format!("{i}: {m}")));
+            ListItem::new(content)
+        })
+        .collect();
+
+    let os_messages =
+        List::new(os_messages).block(Block::default().borders(Borders::ALL).title("OS Messages"))
+        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
+        .highlight_symbol(">>");
+    f.render_stateful_widget(os_messages, inner_types[1], &mut app.list_state);
+
 }

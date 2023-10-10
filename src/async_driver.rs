@@ -1,0 +1,87 @@
+use std::{pin::{Pin, pin}, time::Duration, task::{Poll, Waker}, ptr::null_mut, sync::{Arc, Mutex}, thread};
+use pin_project::pinned_drop;
+use tokio::time::Instant;
+use tokio_stream::Stream;
+
+use crate::virtio::{guest_driver::GuestDriver, virtqueue::DescriptorCell};
+
+pub struct SharedState {
+    complete: bool,
+    waker: Option<Waker>
+}
+
+#[pin_project::pin_project(PinnedDrop)]
+pub struct DriverPoller<'a, const S: usize> {
+    driver: &'a mut GuestDriver<S>,
+    last_update: Instant,
+    shared_state: Arc<Mutex<SharedState>>
+}
+
+impl <'a, const S: usize> DriverPoller<'a, S> {
+    pub fn new(driver: &'a mut GuestDriver<S>) -> Self {
+        Self {
+            driver,
+            last_update: Instant::now(),
+            shared_state : Arc::new(Mutex::new(SharedState {
+                complete: false,
+                waker: None
+            })),
+        }
+    }
+
+    pub fn delayed_poller(&self) -> () {
+        let shared_state = self.shared_state.clone();
+
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(500));
+
+                let mut state = shared_state.lock().unwrap();
+
+                if state.complete {
+                    return
+                }
+
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
+                }
+
+                drop(state);
+            }
+        });
+    }
+}
+
+impl <'a, const S: usize> Stream for DriverPoller<'a, S> {
+    type Item = *mut DescriptorCell;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+
+        if this.last_update.elapsed().as_secs() > 20 {
+            *this.last_update = Instant::now();
+            return Poll::Ready(Some(null_mut()));
+        }
+
+        unsafe {
+            if let Some(found) = this.driver.check_avail_queue() {
+                Poll::Ready(Some(found))
+            } else {
+                let mut state = this.shared_state.lock().unwrap();
+                state.waker = Some(cx.waker().clone());
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
+
+#[pinned_drop]
+impl <'a, const S: usize> PinnedDrop for DriverPoller<'a, S> {
+    fn drop(self: Pin<&mut Self>) {
+        let mut state = self.shared_state.lock().unwrap();
+        state.complete = true;
+    }
+}
+

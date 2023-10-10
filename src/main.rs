@@ -3,6 +3,7 @@
 mod comms;
 mod terminal_thread;
 mod os_thread;
+mod async_driver;
 mod virtio;
 
 use std::{error::Error, thread};
