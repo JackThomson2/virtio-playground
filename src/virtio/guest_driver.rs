@@ -51,17 +51,19 @@ impl<const S: usize> GuestDriver<S> {
         let ring_cell = available_ring.get_ring_from_idx(self.available_index);
         *ring_cell = idx;
 
+        available_ring.increment_idx(S as u16);
+
         fence(Release);
 
         self.available_index += 1;
         self.available_index &= (S as u16) - 1;
     }
 
-    pub unsafe fn check_avail_queue(&mut self) -> Option<*mut DescriptorCell> {
+    pub unsafe fn check_used_queue(&mut self) -> Option<*mut DescriptorCell> {
         let queue = self.queue.as_mut().unwrap();
         let used = queue.used.as_mut().unwrap();
 
-        let current_idx = used.idx.load(Acquire);
+        let current_idx = used.idx;
 
         // If this happens there have been no updates
         if current_idx == self.free_index {

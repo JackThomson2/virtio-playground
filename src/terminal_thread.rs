@@ -42,6 +42,31 @@ impl InputMode {
     }
 }
 
+enum OsMessageTypes {
+    Os(String),
+    Driver(String)
+}
+
+impl OsMessageTypes {
+
+    pub fn to_span(&self, idx: usize) -> Span {
+        let text = match self {
+            OsMessageTypes::Os(str) | OsMessageTypes::Driver(str) => str
+        };
+
+        let message = format!("{idx}: {}", text);
+
+        match self {
+            OsMessageTypes::Os(_) => {
+                Span::styled(message, Style::default().fg(Color::Blue))
+            },
+            OsMessageTypes::Driver(_) => {
+                Span::styled(message, Style::default().fg(Color::Green))
+            }
+        }
+    }
+}
+
 /// App holds the state of the application
 struct App {
     /// Current value of the input box
@@ -51,7 +76,7 @@ struct App {
     /// Current input mode
     input_mode: InputMode,
 
-    os_message: Vec<String>,
+    os_message: Vec<OsMessageTypes>,
 
     /// History of recorded messages
     messages: Vec<String>,
@@ -62,7 +87,8 @@ struct App {
     file_name: String,
     file_contents: String,
 
-    list_state: ListState
+    list_state: ListState,
+    os_list_state: ListState
 }
 
 
@@ -77,7 +103,8 @@ impl App {
             comms,
             file_name: String::new(),
             file_contents: String::new(),
-            list_state: ListState::default()
+            list_state: ListState::default(),
+            os_list_state: ListState::default(),
         }
     }
 
@@ -105,39 +132,40 @@ impl App {
         self.cursor_position = self.clamp_cursor(cursor_moved_right);
     }
 
-    fn move_cursor_up(&mut self) {
-        if self.messages.is_empty() {
-            self.list_state.select(None)
+    fn move_cursor_up_normal(&mut self) {
+        if self.os_message.is_empty() {
+            self.os_list_state.select(None)
         }
 
-        if let Some(curr_selected) = self.list_state.selected() {
+        if let Some(curr_selected) = self.os_list_state.selected() {
             if curr_selected == 0 {
-                self.list_state.select(None);
+                self.os_list_state.select(None);
                 return;
             }
 
             let selecting = Some(curr_selected.saturating_sub(1));
-            self.list_state.select(selecting);
+            self.os_list_state.select(selecting);
         }
     }
 
-    fn move_cursor_down(&mut self) {
-        if self.messages.is_empty() {
-            self.list_state.select(None)
+    fn move_cursor_down_normal(&mut self) {
+        if self.os_message.is_empty() {
+            self.os_list_state.select(None)
         }
 
         let mut selecting = Some(0);
-        if let Some(curr_selected) = self.list_state.selected() {
-            selecting = Some((curr_selected + 1).clamp(0, self.messages.len() - 1));
+        if let Some(curr_selected) = self.os_list_state.selected() {
+            selecting = Some((curr_selected + 1).clamp(0, self.os_message.len() - 1));
         }
 
-        self.list_state.select(selecting);
+        self.os_list_state.select(selecting);
     }
 
     fn enter_char(&mut self, new_char: char) {
-        self.input.insert(self.cursor_position, new_char);
-
-        self.move_cursor_right();
+        if self.list_state.selected().is_none() {
+            self.input.insert(self.cursor_position, new_char);
+            self.move_cursor_right();
+        }
     }
 
     fn delete_char(&mut self) {
@@ -244,48 +272,56 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
         let os_event = app.comms.rx.recv().fuse();
 
         select! {
-            Some(Ok(Event::Key(key))) = event => {
-                match app.input_mode {
-                    InputMode::Normal => match key.code {
-                        KeyCode::Char('e') => {
-                            app.enter_edit();
-                        }
-                        KeyCode::Char('q') => {
-                            return Ok(());
-                        }
-                        KeyCode::Up => {
-                            app.move_cursor_up();
-                        }
-                        KeyCode::Down => {
-                            app.move_cursor_down();
-                        }
+            maybe_event = event => {
+                if let Some(Ok(Event::Key(key))) = maybe_event {
+                    match app.input_mode {
+                        InputMode::Normal => match key.code {
+                            KeyCode::Char('e') => {
+                                app.enter_edit();
+                            }
+                            KeyCode::Char('q') => {
+                                return Ok(());
+                            }
+                            KeyCode::Up => {
+                                app.move_cursor_up_normal();
+                            }
+                            KeyCode::Down => {
+                                app.move_cursor_down_normal();
+                            }
+                            _ => {}
+                        },
+                        _ if key.kind == KeyEventKind::Press => match key.code {
+                            KeyCode::Enter => app.submit_message(),
+                            KeyCode::Char(to_insert) => {
+                                app.enter_char(to_insert);
+                            }
+                            KeyCode::Backspace => {
+                                app.delete_char();
+                            }
+                            KeyCode::Left => {
+                                app.move_cursor_left();
+                            }
+                            KeyCode::Right => {
+                                app.move_cursor_right();
+                            }
+                            KeyCode::Esc => {
+                                app.esc_pressed().await;
+                            }
+                            _ => {}
+                        },
                         _ => {}
-                    },
-                    _ if key.kind == KeyEventKind::Press => match key.code {
-                        KeyCode::Enter => app.submit_message(),
-                        KeyCode::Char(to_insert) => {
-                            app.enter_char(to_insert);
-                        }
-                        KeyCode::Backspace => {
-                            app.delete_char();
-                        }
-                        KeyCode::Left => {
-                            app.move_cursor_left();
-                        }
-                        KeyCode::Right => {
-                            app.move_cursor_right();
-                        }
-                        KeyCode::Esc => {
-                            app.esc_pressed().await;
-                        }
-                        _ => {}
-                    },
-                    _ => {}
+                    }
                 }
             },
             Some(message) = os_event => {
-                if let Messages::String(str) = message {
-                    app.os_message.push(format!("{str}"));
+                match message {
+                    Messages::OSMessage(str) => {
+                        app.os_message.push(OsMessageTypes::Os(str))
+                    },
+                    Messages::DriverMessage(str) => {
+                        app.os_message.push(OsMessageTypes::Driver(str))
+                    },
+                    _ => {}
                 }
             }
         }
@@ -399,7 +435,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            let content = Line::from(Span::raw(format!("{i}: {m}")));
+            let content = Line::from(m.to_span(i));
             ListItem::new(content)
         })
         .collect();
@@ -408,6 +444,5 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         List::new(os_messages).block(Block::default().borders(Borders::ALL).title("OS Messages"))
         .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
         .highlight_symbol(">>");
-    f.render_stateful_widget(os_messages, inner_types[1], &mut app.list_state);
-
+    f.render_stateful_widget(os_messages, inner_types[1], &mut app.os_list_state);
 }

@@ -1,4 +1,4 @@
-use std::{pin::{Pin, pin}, time::Duration, task::{Poll, Waker}, ptr::null_mut, sync::{Arc, Mutex}, thread};
+use std::{pin::{Pin, pin}, time::Duration, task::{Poll, Waker}, ptr::null_mut, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering::Relaxed}}, thread};
 use pin_project::pinned_drop;
 use tokio::time::Instant;
 use tokio_stream::Stream;
@@ -27,6 +27,11 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
                 waker: None
             })),
         }
+    }
+
+    pub unsafe fn get_driver(&self) -> *mut GuestDriver<S> {
+        let const_ptr = self.driver as *const GuestDriver<S>;
+        const_ptr as *mut GuestDriver<S>
     }
 
     pub fn delayed_poller(&self) -> () {
@@ -58,13 +63,8 @@ impl <'a, const S: usize> Stream for DriverPoller<'a, S> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
 
-        if this.last_update.elapsed().as_secs() > 20 {
-            *this.last_update = Instant::now();
-            return Poll::Ready(Some(null_mut()));
-        }
-
         unsafe {
-            if let Some(found) = this.driver.check_avail_queue() {
+            if let Some(found) = this.driver.check_used_queue() {
                 Poll::Ready(Some(found))
             } else {
                 let mut state = this.shared_state.lock().unwrap();

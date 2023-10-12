@@ -2,10 +2,10 @@ use std::{mem::{size_of, ManuallyDrop, MaybeUninit}, sync::atomic::{AtomicU16, O
 
 #[repr(C)]
 pub struct DescriptorCell {
-    addr: u64,
-    length: u32,
-    flags: u16,
-    next: u16,
+    pub addr: u64,
+    pub length: u32,
+    pub flags: u16,
+    pub next: u16,
 }
 
 impl Default for DescriptorCell {
@@ -17,7 +17,7 @@ impl Default for DescriptorCell {
 #[repr(C)]
 pub struct Available {
     flags: u16,
-    idx: AtomicU16,
+    idx: u16,
     ring: *mut u16
 }
 
@@ -27,10 +27,16 @@ pub struct UsedCell {
     pub len: u32
 }
 
+impl Default for UsedCell {
+    fn default() -> Self {
+        Self { id: 0, len: 0 }
+    }
+}
+
 #[repr(C)]
 pub struct Used {
     pub flags: u16,
-    pub idx: AtomicU16,
+    pub idx: u16,
     pub ring: *mut UsedCell
 }
 
@@ -41,40 +47,40 @@ pub struct VirtQueue<const S: usize> {
     pub size: u16,
 }
 
-type MemoryRange      = ManuallyDrop<Box<[MaybeUninit<UsedCell>]>>;
+type MemoryRange      = ManuallyDrop<Box<[UsedCell]>>;
 type MemoryDescriptor = ManuallyDrop<Box<[DescriptorCell]>>;
 type MemoryAvailable  = ManuallyDrop<Box<[u16]>>;
 
 impl Available {
-
     pub unsafe fn get_ring_from_idx(&mut self, idx: u16) -> *mut u16 {
         self.ring.add(idx as usize)
+    }
 
+    pub fn get_idx(&mut self) -> u16 {
+        self.idx
     }
 
     pub fn increment_idx(&mut self, max_size: u16) {
-        let current = self.idx.load(SeqCst);
+        let new_idx = (self.idx + 1) & max_size - 1;
 
-        if current - 1 >= max_size {
-            self.idx.store(0, SeqCst);
-        }
-
-        self.idx.fetch_add(1, SeqCst);
+        self.idx = new_idx;
     }
 }
 
 impl Used {
-
     pub unsafe fn get_ring_from_idx(&mut self, idx: u16) -> *mut UsedCell {
         self.ring.add(idx as usize)
     }
-
 }
 
 impl<const S: usize> VirtQueue<S> {
     pub fn new_with_size() -> Self {
         unsafe {
-            let mut used_list: MemoryRange = ManuallyDrop::new(Box::new_uninit_slice(S));
+            let mut used_list: MemoryRange = ManuallyDrop::new(
+                Vec::from_iter(
+                    (0..S).map(|_| Default::default())
+                ).into_boxed_slice()
+            );
             let mut available_list: MemoryAvailable = ManuallyDrop::new(Vec::from_iter(0..S as u16).into_boxed_slice());
             let mut descriptor_table: MemoryDescriptor = ManuallyDrop::new(
                 Vec::from_iter(
@@ -84,13 +90,13 @@ impl<const S: usize> VirtQueue<S> {
 
             let mut used = ManuallyDrop::new(Box::new(Used {
                 flags: 0,
-                idx: AtomicU16::new(0),
-                ring: used_list[0].assume_init_mut()
+                idx: 0,
+                ring: used_list.as_mut_ptr()
             }));
 
             let mut available = ManuallyDrop::new(Box::new(Available {
                 flags: 0,
-                idx: AtomicU16::new(0),
+                idx: 0,
                 ring: available_list.as_mut_ptr()
             }));
 
@@ -106,25 +112,6 @@ impl<const S: usize> VirtQueue<S> {
     pub unsafe fn get_descriptor_from_idx(&self, idx: u16) -> &mut DescriptorCell {
         self.descriptor_cell.add(idx as usize).as_mut().unwrap()
     }
-
-    // pub unsafe fn get_descriptor_cell(&mut self) -> Option<*mut DescriptorCell> {
-    //     if self.available_count == 0 {
-    //         return None;
-    //     }
-
-    //     let available_cell = self.available.as_mut().unwrap();
-
-    //     let next_slot = match available_cell.get_next_slot(self.size) {
-    //         Some(slot) => slot,
-    //         None => return None
-    //     };
-
-    //     self.available_count = self.available_count.saturating_sub(1);
-
-    //     let cell_to_give = self.descriptor_cell.add(next_slot as usize);
-
-    //     Some(cell_to_give)
-    // }
 }
 
 #[test]

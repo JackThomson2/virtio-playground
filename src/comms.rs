@@ -2,6 +2,8 @@ use tokio::sync::mpsc::{channel, Sender, Receiver};
 
 pub enum Messages {
     String(String),
+    OSMessage(String),
+    DriverMessage(String),
     FileWrite(String, String),
 }
 
