@@ -8,20 +8,19 @@ use futures::FutureExt;
 
 use tokio::runtime;
 
+use crate::faux_blk;
 use crate::async_driver::DriverPoller;
 
 use crate::{comms::{CommsLink, Messages}, virtio::guest_driver::GuestDriver};
 
-unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, file_name: &str, file_contents: &str) -> bool {
-    let driver = driver_ptr.as_mut().unwrap();
-
+unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, message: &str, flag: u16) -> bool {
     let (cell_ptr, idx) = match driver.get_descriptor_cell() {
         Some(res) => res,
         None => return false,
     };
 
     let cell = cell_ptr.as_mut().unwrap();
-    let mut message = format!("File name: {file_name}. Contents: {file_contents}");
+    let mut message = message.to_string();
     message.shrink_to_fit();
 
     let device_address = ManuallyDrop::new(message);
@@ -29,10 +28,31 @@ unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, f
 
     cell.addr = device_address.as_ptr() as u64;
     cell.length = length as u32;
-    cell.flags = 1;
+    cell.flags = flag;
     cell.next = 0;
 
     driver.submit_to_avail_queue(idx);
+
+    return true
+}
+
+unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, file_name: &str, file_contents: &str) -> bool {
+    let driver = driver_ptr.as_mut().unwrap();
+
+    const OPEN_FILE_FLAG: u16= faux_blk::FILE_WRITE | faux_blk::FILE_OPEN_FLAG;
+    if !write_string_to_queue(driver, file_name, OPEN_FILE_FLAG) {
+        return false;
+    }
+
+    const WRITE_CONTENTS: u16 = faux_blk::FILE_WRITE | faux_blk::FILE_WRITE_CONTENTS_FLAG;
+    if !write_string_to_queue(driver, file_contents, WRITE_CONTENTS) {
+        return false;
+    }
+
+    const CLOSE_FILE_FLAG: u16 = faux_blk::FILE_WRITE | faux_blk::FILE_CLOSE_FLAG;
+    if !write_string_to_queue(driver, "", CLOSE_FILE_FLAG) {
+        return false;
+    }
 
     true
 }

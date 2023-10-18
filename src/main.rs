@@ -1,5 +1,6 @@
 #![feature(new_uninit)]
 
+mod faux_blk;
 mod comms;
 mod terminal_thread;
 mod device_thread;

@@ -56,14 +56,14 @@ impl Available {
         self.ring.add(idx as usize)
     }
 
-    pub fn get_idx(&mut self) -> u16 {
-        self.idx
+    pub unsafe fn get_idx(&mut self) -> u16 {
+        (self.idx as *mut u16).read_volatile()
     }
 
-    pub fn increment_idx(&mut self, max_size: u16) {
-        let new_idx = (self.idx + 1) & max_size - 1;
+    pub unsafe fn increment_idx(&mut self, max_size: u16) {
+        let new_idx = (self.get_idx() + 1) & max_size - 1;
 
-        self.idx = new_idx;
+        (self.idx as *mut u16).write_volatile(new_idx);
     }
 }
 
@@ -75,37 +75,35 @@ impl Used {
 
 impl<const S: usize> VirtQueue<S> {
     pub fn new_with_size() -> Self {
-        unsafe {
-            let mut used_list: MemoryRange = ManuallyDrop::new(
-                Vec::from_iter(
-                    (0..S).map(|_| Default::default())
-                ).into_boxed_slice()
-            );
-            let mut available_list: MemoryAvailable = ManuallyDrop::new(Vec::from_iter(0..S as u16).into_boxed_slice());
-            let mut descriptor_table: MemoryDescriptor = ManuallyDrop::new(
-                Vec::from_iter(
-                    (0..S).map(|_| Default::default())
-                ).into_boxed_slice()
-            );
+        let mut used_list: MemoryRange = ManuallyDrop::new(
+            Vec::from_iter(
+                (0..S).map(|_| Default::default())
+            ).into_boxed_slice()
+        );
+        let mut available_list: MemoryAvailable = ManuallyDrop::new(Vec::from_iter(0..S as u16).into_boxed_slice());
+        let mut descriptor_table: MemoryDescriptor = ManuallyDrop::new(
+            Vec::from_iter(
+                (0..S).map(|_| Default::default())
+            ).into_boxed_slice()
+        );
 
-            let mut used = ManuallyDrop::new(Box::new(Used {
-                flags: 0,
-                idx: 0,
-                ring: used_list.as_mut_ptr()
-            }));
+        let mut used = ManuallyDrop::new(Box::new(Used {
+            flags: 0,
+            idx: 0,
+            ring: used_list.as_mut_ptr()
+        }));
 
-            let mut available = ManuallyDrop::new(Box::new(Available {
-                flags: 0,
-                idx: 0,
-                ring: available_list.as_mut_ptr()
-            }));
+        let mut available = ManuallyDrop::new(Box::new(Available {
+            flags: 0,
+            idx: 0,
+            ring: available_list.as_mut_ptr()
+        }));
 
-            Self {
-                descriptor_cell: descriptor_table.as_mut_ptr(),
-                available: available.as_mut(),
-                used: used.as_mut(),
-                size: S as u16,
-            }
+        Self {
+            descriptor_cell: descriptor_table.as_mut_ptr(),
+            available: available.as_mut(),
+            used: used.as_mut(),
+            size: S as u16,
         }
     }
 
