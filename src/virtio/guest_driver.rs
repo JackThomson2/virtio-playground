@@ -59,7 +59,7 @@ impl<const S: usize> GuestDriver<S> {
         self.available_index &= (S as u16) - 1;
     }
 
-    pub unsafe fn check_used_queue(&mut self) -> Option<*mut DescriptorCell> {
+    pub unsafe fn check_used_queue(&mut self) -> Option<(*mut DescriptorCell, u16)> {
         let queue = self.queue.as_mut().unwrap();
         let used = queue.used.as_mut().unwrap();
 
@@ -73,7 +73,16 @@ impl<const S: usize> GuestDriver<S> {
         let freed_item = used.get_ring_from_idx(self.free_index).as_ref().unwrap();
         self.free_index += 1;
 
-        Some(queue.get_descriptor_from_idx(freed_item.id as u16))
+        Some((queue.get_descriptor_from_idx(freed_item.id) as *mut DescriptorCell, freed_item.id))
+    }
+
+    pub unsafe fn release_back_to_pool(&mut self, cell: *mut DescriptorCell, idx: u16) {
+        self.free_descriptor_cells[self.descriptor_item_index + 1] = idx;
+        self.descriptor_item_index += 1;
+
+        let cell_ref = cell.as_ref().unwrap();
+
+        drop(Vec::from_raw_parts(cell_ref.addr as *mut u8, cell_ref.length as usize, cell_ref.length as usize));
     }
 }
 

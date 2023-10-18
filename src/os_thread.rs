@@ -11,6 +11,7 @@ use tokio::runtime;
 use crate::faux_blk;
 use crate::async_driver::DriverPoller;
 
+use crate::virtio::virtqueue::DescriptorCell;
 use crate::{comms::{CommsLink, Messages}, virtio::guest_driver::GuestDriver};
 
 unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, message: &str, flag: u16) -> bool {
@@ -85,7 +86,8 @@ pub fn create_os_thread<const S: usize>(mut ui_comms: CommsLink, mut driver: Gue
                         ui_comms.tx.send(write_message).await.unwrap();
                     }
                 },
-                Some(poll) = poller_loop => {
+                Some((cell, idx)) = poller_loop => {
+                    unsafe { poller.get_driver_ref().release_back_to_pool(cell, idx) }
                     ui_comms.tx.send(Messages::OSMessage(format!("We got a notification from our device driver!"))).await.unwrap();
                 }
             }

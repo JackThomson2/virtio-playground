@@ -1,11 +1,11 @@
-use std::{time::Duration, thread};
+use std::{time::Duration, thread, mem::ManuallyDrop};
 
 use tokio::sync::mpsc::Sender;
 
 use crate::{comms::Messages, virtio::{device_driver::DeviceDriver, virtqueue::DescriptorCell}, faux_blk::{self, FILE_STATE_FLAG, STATE_SUCCESS}};
 
-unsafe fn read_string_from_cell(cell: &DescriptorCell) -> String {
-    String::from_raw_parts(cell.addr as *mut u8, cell.length as usize, cell.length as usize)
+unsafe fn read_string_from_cell(cell: &DescriptorCell) -> ManuallyDrop<String> {
+    ManuallyDrop::new(String::from_raw_parts(cell.addr as *mut u8, cell.length as usize, cell.length as usize))
 }
 
 unsafe fn write_success_to_cell(cell: &mut DescriptorCell) {

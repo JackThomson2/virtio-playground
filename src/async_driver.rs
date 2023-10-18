@@ -34,6 +34,10 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
         const_ptr as *mut GuestDriver<S>
     }
 
+    pub unsafe fn get_driver_ref(&mut self) ->&mut GuestDriver<S> {
+        self.driver
+    }
+
     pub fn delayed_poller(&self) -> () {
         let shared_state = self.shared_state.clone();
 
@@ -58,7 +62,7 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
 }
 
 impl <'a, const S: usize> Stream for DriverPoller<'a, S> {
-    type Item = *mut DescriptorCell;
+    type Item = (*mut DescriptorCell, u16);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();

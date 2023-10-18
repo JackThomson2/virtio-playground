@@ -8,6 +8,7 @@ pub struct DescriptorCell {
     pub next: u16,
 }
 
+
 impl Default for DescriptorCell {
     fn default() -> Self {
         Self { addr: 0, length: 0, flags: 0, next: 0 }
