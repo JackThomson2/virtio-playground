@@ -63,7 +63,7 @@ impl<const S: usize> GuestDriver<S> {
         let queue = self.queue.as_mut().unwrap();
         let used = queue.used.as_mut().unwrap();
 
-        let current_idx = used.idx;
+        let current_idx = used.get_idx();
 
         // If this happens there have been no updates
         if current_idx == self.free_index {
@@ -71,6 +71,7 @@ impl<const S: usize> GuestDriver<S> {
         }
 
         let freed_item = used.get_ring_from_idx(self.free_index).as_ref().unwrap();
+        self.free_index += 1;
 
         Some(queue.get_descriptor_from_idx(freed_item.id as u16))
     }

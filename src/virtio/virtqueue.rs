@@ -23,7 +23,7 @@ pub struct Available {
 
 #[repr(C)]
 pub struct UsedCell {
-    pub id: u32,
+    pub id: u16,
     pub len: u32
 }
 
@@ -57,19 +57,29 @@ impl Available {
     }
 
     pub unsafe fn get_idx(&mut self) -> u16 {
-        (self.idx as *mut u16).read_volatile()
+        (&self.idx as *const u16).read_volatile()
     }
 
     pub unsafe fn increment_idx(&mut self, max_size: u16) {
         let new_idx = (self.get_idx() + 1) & max_size - 1;
 
-        (self.idx as *mut u16).write_volatile(new_idx);
+        (&mut self.idx as *mut u16).write_volatile(new_idx);
     }
 }
 
 impl Used {
     pub unsafe fn get_ring_from_idx(&mut self, idx: u16) -> *mut UsedCell {
         self.ring.add(idx as usize)
+    }
+
+    pub unsafe fn get_idx(&mut self) -> u16 {
+        (&self.idx as *const u16).read_volatile()
+    }
+
+    pub unsafe fn increment_idx(&mut self, max_size: u16) {
+        let new_idx = (self.get_idx() + 1) & max_size - 1;
+
+        (&mut self.idx as *mut u16).write_volatile(new_idx);
     }
 }
 

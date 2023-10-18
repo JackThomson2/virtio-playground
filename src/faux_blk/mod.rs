@@ -9,3 +9,6 @@ pub const FILE_STATE_FLAG: u16 = 1 << 6;
 
 pub const STATE_OPEN: u16   = 1 << 3;
 pub const STATE_CLOSED: u16 = 1 << 4;
+
+pub const STATE_SUCCESS: u16 = 1 << 5;
+pub const STATE_FAIL: u16 = 1 << 6;

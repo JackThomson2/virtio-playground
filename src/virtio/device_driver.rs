@@ -9,8 +9,6 @@ pub struct DeviceDriver<const S: usize> {
     free_index: u16,
 
     file: Option<File>,
-
-    descriptor_item_index: usize,
 }
 
 impl<const S: usize> DeviceDriver<S> {
@@ -22,8 +20,6 @@ impl<const S: usize> DeviceDriver<S> {
             free_index: 0,
 
             file: None,
-
-            descriptor_item_index: S,
         }
     }
 
@@ -61,40 +57,26 @@ impl<const S: usize> DeviceDriver<S> {
         }
 
         let loading_idx = self.available_index;
-        let available_ring_pos = available_ring.get_ring_from_idx(loading_idx);
+        let available_ring_pos = available_ring.get_ring_from_idx(loading_idx).read_volatile();
 
         self.available_index += 1;
 
-        Some((queue.get_descriptor_from_idx(*available_ring_pos), *available_ring_pos))
+        Some((queue.get_descriptor_from_idx(available_ring_pos), available_ring_pos))
     }
 
-    pub unsafe fn submit_to_avail_queue(&mut self, idx: u16) {
+    pub unsafe fn submit_to_used_queue(&mut self, cell_pos: u16) {
         let queue = self.queue.as_mut().unwrap();
         let used_ring = queue.used.as_mut().unwrap();
 
-        // let ring_cell = used_ring.get_ring_from_idx(self.available_index);
-        // *ring_cell = idx;
+        let ring_cell = used_ring.get_ring_from_idx(self.available_index).as_mut().unwrap();
+        (&mut ring_cell.id as *mut u16).write_volatile(cell_pos);
 
-        // fence(Release);
+        used_ring.increment_idx(S as u16);
 
-        // self.available_index += 1;
-        // self.available_index &= (S as u16) - 1;
-    }
+        fence(Release);
 
-    pub unsafe fn check_avail_queue(&mut self) -> Option<*mut DescriptorCell> {
-        let queue = self.queue.as_mut().unwrap();
-        let used = queue.used.as_mut().unwrap();
-
-        let current_idx = used.idx;
-
-        // If this happens there have been no updates
-        if current_idx == self.free_index {
-            return None;
-        }
-
-        let freed_item = used.get_ring_from_idx(self.free_index).as_ref().unwrap();
-
-        Some(queue.get_descriptor_from_idx(freed_item.id as u16))
+        self.free_index += 1;
+        self.free_index &= (S as u16) - 1;
     }
 }
 
