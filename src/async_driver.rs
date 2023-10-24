@@ -3,7 +3,7 @@ use pin_project::pinned_drop;
 use tokio::time::Instant;
 use tokio_stream::Stream;
 
-use crate::virtio::{guest_driver::GuestDriver, virtqueue::DescriptorCell};
+use crate::{virtio::{guest_driver::GuestDriver, virtqueue::DescriptorCell}, epoll::wait_for_epoll_event};
 
 pub struct SharedState {
     complete: bool,
@@ -40,11 +40,11 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
 
     pub fn delayed_poller(&self) -> () {
         let shared_state = self.shared_state.clone();
+        let epoll_fd = self.driver.epoll_listener;
+        let epoll_root_fd = self.driver.epoll_listener_fd;
 
         thread::spawn(move || {
             loop {
-                thread::sleep(Duration::from_millis(500));
-
                 let mut state = shared_state.lock().unwrap();
 
                 if state.complete {
@@ -56,6 +56,10 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
                 }
 
                 drop(state);
+
+                unsafe {
+                    wait_for_epoll_event(epoll_fd, epoll_root_fd)
+                }
             }
         });
     }

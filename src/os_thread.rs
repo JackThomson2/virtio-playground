@@ -11,7 +11,6 @@ use tokio::runtime;
 use crate::faux_blk;
 use crate::async_driver::DriverPoller;
 
-use crate::virtio::virtqueue::DescriptorCell;
 use crate::{comms::{CommsLink, Messages}, virtio::guest_driver::GuestDriver};
 
 unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, message: &str, flag: u16) -> bool {
@@ -25,7 +24,7 @@ unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, mes
     message.shrink_to_fit();
 
     let device_address = ManuallyDrop::new(message);
-    let length = device_address.len();
+    let length = device_address.capacity();
 
     cell.addr = device_address.as_ptr() as u64;
     cell.length = length as u32;
@@ -37,10 +36,32 @@ unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, mes
     return true
 }
 
+unsafe fn read_request_to_queue<const S: usize>(driver: &mut GuestDriver<S>, flag: u16) -> bool {
+    let (cell_ptr, idx) = match driver.get_descriptor_cell() {
+        Some(res) => res,
+        None => return false,
+    };
+
+    let cell = cell_ptr.as_mut().unwrap();
+    let storage_blob = Vec::<u8>::with_capacity(2048);
+    let values = ManuallyDrop::new(storage_blob);
+
+    let length = values.capacity();
+
+    cell.addr = values.as_ptr() as u64;
+    cell.length = length as u32;
+    cell.flags = flag;
+    cell.next = 0;
+
+    driver.submit_to_avail_queue(idx);
+
+    true
+}
+
 unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, file_name: &str, file_contents: &str) -> bool {
     let driver = driver_ptr.as_mut().unwrap();
 
-    const OPEN_FILE_FLAG: u16= faux_blk::FILE_WRITE | faux_blk::FILE_OPEN_FLAG;
+    const OPEN_FILE_FLAG: u16 = faux_blk::FILE_WRITE | faux_blk::FILE_OPEN_FLAG;
     if !write_string_to_queue(driver, file_name, OPEN_FILE_FLAG) {
         return false;
     }
@@ -51,6 +72,27 @@ unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, f
     }
 
     const CLOSE_FILE_FLAG: u16 = faux_blk::FILE_WRITE | faux_blk::FILE_CLOSE_FLAG;
+    if !write_string_to_queue(driver, "", CLOSE_FILE_FLAG) {
+        return false;
+    }
+
+    true
+}
+
+unsafe fn read_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, file_name: &str) -> bool {
+    let driver = driver_ptr.as_mut().unwrap();
+
+    const OPEN_FILE_FLAG: u16 = faux_blk::FILE_READ | faux_blk::FILE_OPEN_FLAG;
+    if !write_string_to_queue(driver, file_name, OPEN_FILE_FLAG) {
+        return false;
+    }
+
+    const READ_CONTENTS: u16 = faux_blk::FILE_READ | faux_blk::FILE_WRITE_CONTENTS_FLAG;
+    if !read_request_to_queue(driver, READ_CONTENTS) {
+        return false;
+    }
+
+    const CLOSE_FILE_FLAG: u16 = faux_blk::FILE_READ | faux_blk::FILE_CLOSE_FLAG;
     if !write_string_to_queue(driver, "", CLOSE_FILE_FLAG) {
         return false;
     }
@@ -81,6 +123,11 @@ pub fn create_os_thread<const S: usize>(mut ui_comms: CommsLink, mut driver: Gue
 
                     if let Messages::FileWrite(file_name, file_contents) = res {
                         let result = unsafe { write_file_contents(driver_ptr, &file_name, &file_contents) };
+                        let write_message = Messages::OSMessage(format!("Writing to the driver was successful: {result}"));
+
+                        ui_comms.tx.send(write_message).await.unwrap();
+                    } else if let Messages::FileRead(file_name) = res {
+                        let result = unsafe { read_file_contents(driver_ptr, &file_name) };
                         let write_message = Messages::OSMessage(format!("Writing to the driver was successful: {result}"));
 
                         ui_comms.tx.send(write_message).await.unwrap();

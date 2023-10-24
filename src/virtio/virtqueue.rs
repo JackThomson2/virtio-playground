@@ -123,6 +123,9 @@ impl<const S: usize> VirtQueue<S> {
     }
 }
 
+unsafe impl<const S: usize> Send for VirtQueue<S> {}
+unsafe impl<const S: usize> Sync for VirtQueue<S> {}
+
 #[test]
 pub fn test_sizes() {
     println!("Size of des cell: {}", size_of::<DescriptorCell>());

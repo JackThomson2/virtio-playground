@@ -29,6 +29,7 @@ use crate::comms::{CommsLink, Messages};
 #[derive(PartialEq, Eq)]
 enum InputMode {
     Normal,
+    ReadMode,
     FileName,
     Messages,
 }
@@ -44,14 +45,15 @@ impl InputMode {
 
 enum OsMessageTypes {
     Os(String),
-    Driver(String)
+    Driver(String),
+    Global(String),
 }
 
 impl OsMessageTypes {
 
     pub fn to_span(&self, idx: usize) -> Span {
         let text = match self {
-            OsMessageTypes::Os(str) | OsMessageTypes::Driver(str) => str
+            OsMessageTypes::Os(str) | OsMessageTypes::Driver(str) | OsMessageTypes::Global(str) => str
         };
 
         let message = format!("{idx}: {}", text);
@@ -62,6 +64,9 @@ impl OsMessageTypes {
             },
             OsMessageTypes::Driver(_) => {
                 Span::styled(message, Style::default().fg(Color::Green))
+            },
+            OsMessageTypes::Global(_) => {
+                Span::styled(message, Style::default().fg(Color::Red))
             }
         }
     }
@@ -118,6 +123,13 @@ impl App {
     fn enter_edit(&mut self) {
         // self.list_state = ListState::default();
         self.input_mode = InputMode::FileName;
+        self.file_name = String::new();
+        self.file_contents = String::new();
+    }
+
+    fn enter_read(&mut self) {
+        // self.list_state = ListState::default();
+        self.input_mode = InputMode::ReadMode;
         self.file_name = String::new();
         self.file_contents = String::new();
     }
@@ -198,8 +210,14 @@ impl App {
         self.cursor_position = 0;
     }
 
-    fn submit_message(&mut self) {
-        if self.input_mode == InputMode::FileName {
+    async fn submit_message(&mut self) {
+        if self.input_mode == InputMode::ReadMode {
+            self.file_name = self.input.clone();
+            self.messages = vec![format!("Reading a file now!")];
+
+            let create_mesasge = Messages::FileRead(self.file_name.clone());
+            self.comms.tx.send(create_mesasge).await.unwrap();
+        } else if self.input_mode == InputMode::FileName {
             self.file_name = self.input.clone();
             self.messages = vec![];
         } else if self.input_mode == InputMode::Messages {
@@ -279,6 +297,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                             KeyCode::Char('e') => {
                                 app.enter_edit();
                             }
+                            KeyCode::Char('r') => {
+                                app.enter_read();
+                            }
                             KeyCode::Char('q') => {
                                 return Ok(());
                             }
@@ -291,7 +312,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                             _ => {}
                         },
                         _ if key.kind == KeyEventKind::Press => match key.code {
-                            KeyCode::Enter => app.submit_message(),
+                            KeyCode::Enter => {
+                                app.submit_message().await;
+                            }
                             KeyCode::Char(to_insert) => {
                                 app.enter_char(to_insert);
                             }
@@ -321,6 +344,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Re
                     Messages::DriverMessage(str) => {
                         app.os_message.push(OsMessageTypes::Driver(str))
                     },
+                    Messages::GlobalMessages(str) => {
+                        app.os_message.push(OsMessageTypes::Global(str))
+                    }
                     _ => {}
                 }
             }
@@ -356,9 +382,21 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 "q".bold(),
                 " to exit, ".into(),
                 "e".bold(),
-                " to start editing.".bold(),
+                " to start editing, ".bold(),
+                "r".bold(),
+                " to start reading.".bold(),
             ],
             Style::default().add_modifier(Modifier::RAPID_BLINK),
+        ),
+        InputMode::ReadMode=> (
+            vec![
+                "Press ".into(),
+                "Esc".bold(),
+                " cancel reading a file, ".into(),
+                "Enter".bold(),
+                " to read a file".into(),
+            ],
+            Style::default(),
         ),
         InputMode::FileName => (
             vec![
@@ -390,7 +428,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         let input = Paragraph::new(app.input.as_str())
             .style(match app.input_mode {
                 InputMode::Normal => Style::default(),
-                InputMode::FileName => Style::default().fg(Color::Green),
+                InputMode::FileName | InputMode::ReadMode => Style::default().fg(Color::Green),
                 InputMode::Messages => Style::default().fg(Color::Yellow),
             })
             .block(Block::default().borders(Borders::ALL).title("Input"));
