@@ -4,7 +4,7 @@ use crate::{epoll::Epoll, poller::PollableQueue};
 
 use super::virtqueue::{VirtQueue, DescriptorCell};
 
-pub struct GuestDriver<const S: usize, P: PollableQueue + Copy + Clone> {
+pub struct GuestDriver<const S: usize, P: PollableQueue + Clone> {
     queue: *mut VirtQueue<S>,
 
     available_index: u16,
@@ -17,8 +17,14 @@ pub struct GuestDriver<const S: usize, P: PollableQueue + Copy + Clone> {
 }
 
 impl<const S: usize> GuestDriver<S, Epoll> {
+    pub fn new_epoll(queue: *mut VirtQueue<S>, listen_fd: c_int, send_fs: c_int) -> Self {
+        Self::new(queue, Epoll::new(listen_fd, send_fs))
+    }
+}
 
-    pub fn new_driver(queue: *mut VirtQueue<S>, listen_fd: c_int, send_fs: c_int) -> Self {
+impl<const S: usize, P: PollableQueue + Clone> GuestDriver<S, P> {
+
+    pub fn new(queue: *mut VirtQueue<S>, poller: P) -> Self {
         let mut free_cells = [0; S];
 
         for (idx, cell) in free_cells.iter_mut().enumerate() {
@@ -34,13 +40,9 @@ impl<const S: usize> GuestDriver<S, Epoll> {
             descriptor_item_index: S,
             free_descriptor_cells: free_cells,
 
-            poll_interface: Epoll::new(listen_fd, send_fs)
-
+            poll_interface: poller
         }
     }
-}
-
-impl<const S: usize, P: PollableQueue + Copy + Clone> GuestDriver<S, P> {
 
     pub unsafe fn notify_poller(&self) {
         self.poll_interface.submit_event()
@@ -103,4 +105,4 @@ impl<const S: usize, P: PollableQueue + Copy + Clone> GuestDriver<S, P> {
     }
 }
 
-unsafe impl<const S: usize, P: PollableQueue + Copy + Clone> Send for GuestDriver<S, P> {}
+unsafe impl<const S: usize, P: PollableQueue + Clone> Send for GuestDriver<S, P> {}

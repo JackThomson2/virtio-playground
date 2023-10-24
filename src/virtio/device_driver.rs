@@ -4,7 +4,7 @@ use crate::{epoll::Epoll, poller::PollableQueue};
 
 use super::virtqueue::{VirtQueue, DescriptorCell};
 
-pub struct DeviceDriver<const S: usize, P: PollableQueue + Copy + Clone> {
+pub struct DeviceDriver<const S: usize, P: PollableQueue + Clone> {
     queue: *mut VirtQueue<S>,
 
     available_index: u16,
@@ -17,20 +17,25 @@ pub struct DeviceDriver<const S: usize, P: PollableQueue + Copy + Clone> {
 
 impl <const S: usize> DeviceDriver<S, Epoll> {
     pub fn new_epoll(queue: *mut VirtQueue<S>, listen_fd: c_int, send_fs: c_int) -> Self {
+        Self::new(queue, Epoll::new(listen_fd, send_fs))
+    }
+}
+
+impl<const S: usize, P: PollableQueue + Clone> DeviceDriver<S, P> {
+
+    pub fn new(queue: *mut VirtQueue<S>, poller: P) -> Self {
         Self {
             queue,
             available_index: 0,
             free_index: 0,
 
-            file: None,
+            file:  None,
 
-            poller: Epoll::new(listen_fd, send_fs),
+            poller
         }
     }
-}
 
 
-impl<const S: usize, P: PollableQueue + Copy + Clone> DeviceDriver<S, P> {
     pub fn open_file(&mut self, file_name: &str) -> Result<()> {
         let file_opened = File::create(file_name)?;
         self.file = Some(file_opened);
@@ -108,4 +113,4 @@ impl<const S: usize, P: PollableQueue + Copy + Clone> DeviceDriver<S, P> {
     }
 }
 
-unsafe impl<const S: usize, P: PollableQueue + Copy + Clone> Send for DeviceDriver<S, P> {}
+unsafe impl<const S: usize, P: PollableQueue + Clone> Send for DeviceDriver<S, P> {}

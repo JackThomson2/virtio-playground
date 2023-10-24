@@ -11,13 +11,13 @@ pub struct SharedState {
 }
 
 #[pin_project::pin_project(PinnedDrop)]
-pub struct DriverPoller<'a, const S: usize, P: PollableQueue + Copy + Clone + Send> {
+pub struct DriverPoller<'a, const S: usize, P: PollableQueue + Clone + Send> {
     driver: &'a mut GuestDriver<S, P>,
     last_update: Instant,
     shared_state: Arc<Mutex<SharedState>>
 }
 
-impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send + 'static> DriverPoller<'a, S, P> {
+impl <'a, const S: usize, P: PollableQueue + Clone + Send + 'static> DriverPoller<'a, S, P> {
     pub fn new(driver: &'a mut GuestDriver<S, P>) -> Self {
         Self {
             driver,
@@ -62,7 +62,7 @@ impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send + 'static> Driv
     }
 }
 
-impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send> Stream for DriverPoller<'a, S, P> {
+impl <'a, const S: usize, P: PollableQueue + Clone + Send> Stream for DriverPoller<'a, S, P> {
     type Item = (*mut DescriptorCell, u16);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Option<Self::Item>> {
@@ -83,7 +83,7 @@ impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send> Stream for Dri
 
 
 #[pinned_drop]
-impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send> PinnedDrop for DriverPoller<'a, S, P> {
+impl <'a, const S: usize, P: PollableQueue + Clone + Send> PinnedDrop for DriverPoller<'a, S, P> {
     fn drop(self: Pin<&mut Self>) {
         let mut state = self.shared_state.lock().unwrap();
         state.complete = true;

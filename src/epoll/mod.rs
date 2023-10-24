@@ -69,7 +69,7 @@ pub unsafe fn wait_for_epoll_event(listen_fd: c_int, root_fd: c_int) {
     }
 }
 
-unsafe fn read_buffer(listen_fd: c_int) {
+pub unsafe fn read_buffer(listen_fd: c_int) {
     let mut buffer: [u8; 64] = [0; 64];
 
     loop {
