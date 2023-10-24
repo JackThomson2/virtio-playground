@@ -8,6 +8,7 @@ mod os_thread;
 mod async_driver;
 mod virtio;
 mod epoll;
+mod poller;
 
 use std::{error::Error, thread};
 
@@ -16,7 +17,7 @@ use comms::{CommsLink, GLOBAL_COMMS};
 use device_thread::create_device_thread;
 use terminal_thread::create_terminal;
 use os_thread::create_os_thread;
-use virtio::create_queue;
+use virtio::create_epoll_queue;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let (ui_comms, os_comms) = CommsLink::new_pair();
@@ -25,7 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     GLOBAL_COMMS.set_tx_value(global_link);
 
-    let (host_driver, device_driver) = create_queue::<64>();
+    let (host_driver, device_driver) = create_epoll_queue::<64>();
 
     let _os_thread = thread::spawn(move || {
         create_os_thread(os_comms, host_driver);

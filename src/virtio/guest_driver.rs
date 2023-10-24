@@ -1,11 +1,10 @@
 use std::{sync::atomic::{fence, Ordering::Release}, ffi::c_int};
-use libc::{epoll_event, epoll_create1, EPOLLIN, EPOLL_CTL_ADD, epoll_ctl, epoll_wait};
 
-use crate::epoll::{register_epoll_listener, wait_for_epoll_event, notify_epoll_fd};
+use crate::{epoll::Epoll, poller::PollableQueue};
 
 use super::virtqueue::{VirtQueue, DescriptorCell};
 
-pub struct GuestDriver<const S: usize> {
+pub struct GuestDriver<const S: usize, P: PollableQueue + Copy + Clone> {
     queue: *mut VirtQueue<S>,
 
     available_index: u16,
@@ -14,13 +13,10 @@ pub struct GuestDriver<const S: usize> {
     descriptor_item_index: usize,
     free_descriptor_cells: [u16; S],
 
-    pub epoll_listener: c_int,
-    pub epoll_listener_fd: c_int,
-
-    epoll_notifier: c_int,
+    pub poll_interface: P,
 }
 
-impl<const S: usize> GuestDriver<S> {
+impl<const S: usize> GuestDriver<S, Epoll> {
 
     pub fn new_driver(queue: *mut VirtQueue<S>, listen_fd: c_int, send_fs: c_int) -> Self {
         let mut free_cells = [0; S];
@@ -30,10 +26,6 @@ impl<const S: usize> GuestDriver<S> {
         }
 
 
-        let epoll_fd = unsafe {
-            register_epoll_listener(listen_fd)
-        };
-
         Self {
             queue,
             available_index: 0,
@@ -42,15 +34,16 @@ impl<const S: usize> GuestDriver<S> {
             descriptor_item_index: S,
             free_descriptor_cells: free_cells,
 
-            epoll_listener: epoll_fd,
-            epoll_listener_fd: listen_fd,
+            poll_interface: Epoll::new(listen_fd, send_fs)
 
-            epoll_notifier: send_fs,
         }
     }
+}
 
-    pub unsafe fn notify_epoll(&self) {
-        notify_epoll_fd(self.epoll_notifier)
+impl<const S: usize, P: PollableQueue + Copy + Clone> GuestDriver<S, P> {
+
+    pub unsafe fn notify_poller(&self) {
+        self.poll_interface.submit_event()
     }
 
     pub unsafe fn get_descriptor_cell(&mut self) -> Option<(*mut DescriptorCell, u16)> {
@@ -80,7 +73,7 @@ impl<const S: usize> GuestDriver<S> {
         self.available_index += 1;
         self.available_index &= (S as u16) - 1;
 
-        self.notify_epoll();
+        self.notify_poller();
     }
 
     pub unsafe fn check_used_queue(&mut self) -> Option<(*mut DescriptorCell, u16)> {
@@ -110,4 +103,4 @@ impl<const S: usize> GuestDriver<S> {
     }
 }
 
-unsafe impl<const S: usize> Send for GuestDriver<S> {}
+unsafe impl<const S: usize, P: PollableQueue + Copy + Clone> Send for GuestDriver<S, P> {}

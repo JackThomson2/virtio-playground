@@ -11,9 +11,10 @@ use tokio::runtime;
 use crate::faux_blk;
 use crate::async_driver::DriverPoller;
 
+use crate::poller::PollableQueue;
 use crate::{comms::{CommsLink, Messages}, virtio::guest_driver::GuestDriver};
 
-unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, message: &str, flag: u16) -> bool {
+unsafe fn write_string_to_queue<const S: usize, P: PollableQueue + Copy + Clone>(driver: &mut GuestDriver<S, P>, message: &str, flag: u16) -> bool {
     let (cell_ptr, idx) = match driver.get_descriptor_cell() {
         Some(res) => res,
         None => return false,
@@ -36,7 +37,7 @@ unsafe fn write_string_to_queue<const S: usize>(driver: &mut GuestDriver<S>, mes
     return true
 }
 
-unsafe fn read_request_to_queue<const S: usize>(driver: &mut GuestDriver<S>, flag: u16) -> bool {
+unsafe fn read_request_to_queue<const S: usize, P: PollableQueue + Copy + Clone>(driver: &mut GuestDriver<S, P>, flag: u16) -> bool {
     let (cell_ptr, idx) = match driver.get_descriptor_cell() {
         Some(res) => res,
         None => return false,
@@ -58,7 +59,7 @@ unsafe fn read_request_to_queue<const S: usize>(driver: &mut GuestDriver<S>, fla
     true
 }
 
-unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, file_name: &str, file_contents: &str) -> bool {
+unsafe fn write_file_contents<const S: usize, P: PollableQueue + Copy + Clone>(driver_ptr: *mut GuestDriver<S, P>, file_name: &str, file_contents: &str) -> bool {
     let driver = driver_ptr.as_mut().unwrap();
 
     const OPEN_FILE_FLAG: u16 = faux_blk::FILE_WRITE | faux_blk::FILE_OPEN_FLAG;
@@ -79,7 +80,7 @@ unsafe fn write_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, f
     true
 }
 
-unsafe fn read_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, file_name: &str) -> bool {
+unsafe fn read_file_contents<const S: usize, P: PollableQueue + Copy + Clone>(driver_ptr: *mut GuestDriver<S, P>, file_name: &str) -> bool {
     let driver = driver_ptr.as_mut().unwrap();
 
     const OPEN_FILE_FLAG: u16 = faux_blk::FILE_READ | faux_blk::FILE_OPEN_FLAG;
@@ -100,7 +101,7 @@ unsafe fn read_file_contents<const S: usize>(driver_ptr: *mut GuestDriver<S>, fi
     true
 }
 
-pub fn create_os_thread<const S: usize>(mut ui_comms: CommsLink, mut driver: GuestDriver<S>) {
+pub fn create_os_thread<const S: usize, P: PollableQueue + Copy + Clone + Send + 'static>(mut ui_comms: CommsLink, mut driver: GuestDriver<S, P>) {
     let rt = runtime::Builder::new_current_thread().enable_all().build().unwrap();
 
     let mut poller = DriverPoller::new(&mut driver);

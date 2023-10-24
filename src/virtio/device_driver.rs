@@ -1,11 +1,10 @@
 use std::{sync::atomic::{fence, Ordering::{Release, Acquire}}, fs::File, io::{Result, BufWriter, Write, Read}, ffi::c_int};
-use libc::{epoll_event, epoll_create1, EPOLLIN, EPOLL_CTL_ADD, epoll_ctl, epoll_wait};
 
-use crate::epoll::{register_epoll_listener, wait_for_epoll_event, notify_epoll_fd};
+use crate::{epoll::Epoll, poller::PollableQueue};
 
 use super::virtqueue::{VirtQueue, DescriptorCell};
 
-pub struct DeviceDriver<const S: usize> {
+pub struct DeviceDriver<const S: usize, P: PollableQueue + Copy + Clone> {
     queue: *mut VirtQueue<S>,
 
     available_index: u16,
@@ -13,19 +12,11 @@ pub struct DeviceDriver<const S: usize> {
 
     file: Option<File>,
 
-    epoll_listener: c_int,
-    epoll_listener_fd: c_int,
-
-    epoll_notifier: c_int,
+    poller: P,
 }
 
-impl<const S: usize> DeviceDriver<S> {
-
-    pub fn new_driver(queue: *mut VirtQueue<S>, listen_fd: c_int, send_fs: c_int) -> Self {
-        let epoll_fd = unsafe {
-            register_epoll_listener(listen_fd)
-        };
-
+impl <const S: usize> DeviceDriver<S, Epoll> {
+    pub fn new_epoll(queue: *mut VirtQueue<S>, listen_fd: c_int, send_fs: c_int) -> Self {
         Self {
             queue,
             available_index: 0,
@@ -33,13 +24,13 @@ impl<const S: usize> DeviceDriver<S> {
 
             file: None,
 
-            epoll_listener: epoll_fd,
-            epoll_listener_fd: listen_fd,
-
-            epoll_notifier: send_fs,
+            poller: Epoll::new(listen_fd, send_fs),
         }
     }
+}
 
+
+impl<const S: usize, P: PollableQueue + Copy + Clone> DeviceDriver<S, P> {
     pub fn open_file(&mut self, file_name: &str) -> Result<()> {
         let file_opened = File::create(file_name)?;
         self.file = Some(file_opened);
@@ -71,12 +62,12 @@ impl<const S: usize> DeviceDriver<S> {
         self.file = None;
     }
 
-    pub unsafe fn notify_epoll(&mut self) {
-        notify_epoll_fd(self.epoll_notifier)
+    pub unsafe fn notify_poller(&mut self) {
+        self.poller.submit_event();
     }
 
-    pub unsafe fn wait_for_epoll(&mut self) {
-        wait_for_epoll_event(self.epoll_listener, self.epoll_listener_fd)
+    pub unsafe fn wait_for_event(&mut self) {
+        self.poller.wait_for_event()
     }
 
     pub unsafe fn poll_available_queue(&mut self) -> Option<(*mut DescriptorCell, u16)>{
@@ -113,8 +104,8 @@ impl<const S: usize> DeviceDriver<S> {
         self.free_index += 1;
         self.free_index &= (S as u16) - 1;
 
-        self.notify_epoll();
+        self.notify_poller();
     }
 }
 
-unsafe impl<const S: usize> Send for DeviceDriver<S> {}
+unsafe impl<const S: usize, P: PollableQueue + Copy + Clone> Send for DeviceDriver<S, P> {}

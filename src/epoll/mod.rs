@@ -1,5 +1,39 @@
 use libc::{c_int, epoll_event, EPOLLIN, epoll_create1, epoll_ctl, EPOLL_CTL_ADD, epoll_wait, c_void};
-use crate::comms::GLOBAL_COMMS;
+use crate::{comms::GLOBAL_COMMS, poller::PollableQueue};
+
+#[derive(Copy, Clone, Debug)]
+pub struct Epoll {
+    listener_fd: c_int,
+    publish_fd: c_int,
+
+    event_fd: c_int,
+}
+
+impl Epoll {
+    pub fn new(listener_fd: c_int, publish_fd: c_int) -> Self {
+        let event_fd = unsafe { register_epoll_listener(listener_fd) };
+
+        Self {
+            listener_fd,
+            publish_fd,
+
+            event_fd
+        }
+    }
+}
+
+impl PollableQueue for Epoll {
+    fn wait_for_event(&self) {
+        unsafe { wait_for_epoll_event(self.event_fd, self.listener_fd) }
+    }
+
+    fn submit_event(&self) {
+        unsafe { notify_epoll_fd(self.publish_fd) }
+    }
+}
+
+unsafe impl Send for Epoll {}
+unsafe impl Sync for Epoll {}
 
 pub unsafe fn register_epoll_listener(incoming: c_int) -> c_int {
     let epoll_fd = unsafe {

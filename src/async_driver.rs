@@ -1,9 +1,9 @@
-use std::{pin::{Pin, pin}, time::Duration, task::{Poll, Waker}, ptr::null_mut, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering::Relaxed}}, thread};
+use std::{pin::{Pin, pin}, task::{Poll, Waker}, sync::{Arc, Mutex}, thread};
 use pin_project::pinned_drop;
 use tokio::time::Instant;
 use tokio_stream::Stream;
 
-use crate::{virtio::{guest_driver::GuestDriver, virtqueue::DescriptorCell}, epoll::wait_for_epoll_event};
+use crate::{virtio::{guest_driver::GuestDriver, virtqueue::DescriptorCell}, poller::PollableQueue};
 
 pub struct SharedState {
     complete: bool,
@@ -11,14 +11,14 @@ pub struct SharedState {
 }
 
 #[pin_project::pin_project(PinnedDrop)]
-pub struct DriverPoller<'a, const S: usize> {
-    driver: &'a mut GuestDriver<S>,
+pub struct DriverPoller<'a, const S: usize, P: PollableQueue + Copy + Clone + Send> {
+    driver: &'a mut GuestDriver<S, P>,
     last_update: Instant,
     shared_state: Arc<Mutex<SharedState>>
 }
 
-impl <'a, const S: usize> DriverPoller<'a, S> {
-    pub fn new(driver: &'a mut GuestDriver<S>) -> Self {
+impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send + 'static> DriverPoller<'a, S, P> {
+    pub fn new(driver: &'a mut GuestDriver<S, P>) -> Self {
         Self {
             driver,
             last_update: Instant::now(),
@@ -29,19 +29,18 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
         }
     }
 
-    pub unsafe fn get_driver(&self) -> *mut GuestDriver<S> {
-        let const_ptr = self.driver as *const GuestDriver<S>;
-        const_ptr as *mut GuestDriver<S>
+    pub unsafe fn get_driver(&self) -> *mut GuestDriver<S, P> {
+        let const_ptr = self.driver as *const GuestDriver<S, P>;
+        const_ptr as *mut GuestDriver<S, P>
     }
 
-    pub unsafe fn get_driver_ref(&mut self) ->&mut GuestDriver<S> {
+    pub unsafe fn get_driver_ref(&mut self) ->&mut GuestDriver<S, P> {
         self.driver
     }
 
     pub fn delayed_poller(&self) -> () {
         let shared_state = self.shared_state.clone();
-        let epoll_fd = self.driver.epoll_listener;
-        let epoll_root_fd = self.driver.epoll_listener_fd;
+        let poll_item = self.driver.poll_interface.clone();
 
         thread::spawn(move || {
             loop {
@@ -57,15 +56,13 @@ impl <'a, const S: usize> DriverPoller<'a, S> {
 
                 drop(state);
 
-                unsafe {
-                    wait_for_epoll_event(epoll_fd, epoll_root_fd)
-                }
+                poll_item.wait_for_event();
             }
         });
     }
 }
 
-impl <'a, const S: usize> Stream for DriverPoller<'a, S> {
+impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send> Stream for DriverPoller<'a, S, P> {
     type Item = (*mut DescriptorCell, u16);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Option<Self::Item>> {
@@ -86,7 +83,7 @@ impl <'a, const S: usize> Stream for DriverPoller<'a, S> {
 
 
 #[pinned_drop]
-impl <'a, const S: usize> PinnedDrop for DriverPoller<'a, S> {
+impl <'a, const S: usize, P: PollableQueue + Copy + Clone + Send> PinnedDrop for DriverPoller<'a, S, P> {
     fn drop(self: Pin<&mut Self>) {
         let mut state = self.shared_state.lock().unwrap();
         state.complete = true;
